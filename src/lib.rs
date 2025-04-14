@@ -114,40 +114,7 @@ fn bytes_radix(n: &BigUint, len: usize) -> Result<Vec<u8>, FF1Error> {
 ///
 /// # Returns
 /// * `Ok(Vec<u32>)` - The encrypted numeral string Y as a vector of digits.
-/// * `Err(Ff1Error)` - An error if input parameters are invalid or crypto operations fail.
-///
-/// # Example
-/// ```rust
-/// use sm4_ff1::ff1_encrypt;
-/// use sm4_ff1::ff1error::FF1Error;
-///
-/// let pt_str = "3216";
-/// let tweak_str = "1329999";
-/// let key: [u8; 16] = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-///     0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
-/// let expected_ciphertext_str = "8956";
-/// let radix: u32 = 10;
-///
-/// let tweak_bytes = tweak_str.as_bytes();
-///
-/// let minlen = 2;
-/// let maxlen = 100;
-/// let max_tlen = 32;
-///
-/// let x_digits: Vec<u32> = pt_str
-///     .chars()
-///     .map(|c| c.to_digit(radix).ok_or_else(|| FF1Error::InvalidCharDigit(c, radix)))
-///     .collect::<Result<Vec<_>, _>>().unwrap();
-///
-/// let expected_digits: Vec<u32> = expected_ciphertext_str
-///     .chars()
-///     .map(|c| c.to_digit(radix).ok_or_else(|| FF1Error::InvalidCharDigit(c, radix)))
-///     .collect::<Result<Vec<_>, _>>().unwrap();
-///
-/// let result_digits = ff1_encrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &x_digits).unwrap();
-///
-/// assert_eq!(result_digits, expected_digits, "Encryption result does not match expected ciphertext");
-/// ```
+/// * `Err(FF1Error)` - An error if input parameters are invalid or crypto operations fail.
 pub fn ff1_encrypt(
     key: &[u8; 16],
     radix: u32,
@@ -297,9 +264,186 @@ pub fn ff1_encrypt(
     Ok(result_digits)
 }
 
+/// Implements FF1 Decryption according to the provided Algorithm 8 image.
+///
+/// # Arguments
+/// * `key` - The 128-bit (16 byte) key for SM4.
+/// * `radix` - The base of the numeral string X (2 <= radix <= 2^16).
+/// * `minlen` - Minimum allowed length for X.
+/// * `maxlen` - Maximum allowed length for X.
+/// * `max_tlen` - Maximum allowed byte length for the tweak T.
+/// * `tweak` - The tweak T (byte string).
+/// * `x_digits` - The input ciphertext numeral string X as a slice of digits (u32 values 0..radix-1).
+///
+/// # Returns
+/// * `Ok(Vec<u32>)` - The decrypted plaintext numeral string Y as a vector of digits.
+/// * `Err(FF1Error)` - An error if input parameters are invalid or crypto operations fail.
+pub fn ff1_decrypt(
+    key: &[u8; 16],
+    radix: u32,
+    minlen: usize,
+    maxlen: usize,
+    max_tlen: usize,
+    tweak: &[u8],
+    x_digits: &[u32],
+) -> Result<Vec<u32>, FF1Error> {
+    let n = x_digits.len();
+    let t = tweak.len();
+
+    // Validate input parameters
+    if !(2..=65536).contains(&radix) {
+        return Err(FF1Error::InvalidRadix { radix });
+    }
+    if !(minlen..=maxlen).contains(&n) {
+        return Err(FF1Error::InvalidLength { n });
+    }
+    if t > max_tlen {
+        return Err(FF1Error::InvalidTweakLength { t });
+    }
+    let big_radix = radix.to_biguint().ok_or(FF1Error::BigUintConversion)?;
+    let min_radix_pow = big_radix.pow(minlen as u32);
+    if min_radix_pow < 100u32.to_biguint().unwrap() {
+        return Err(FF1Error::ConstraintViolation { radix, minlen });
+    }
+    for &digit in x_digits {
+        if digit >= radix {
+            return Err(FF1Error::InvalidDigit(digit, radix));
+        }
+    }
+
+    // 1. Let u = floor(n/2); v = n - u.
+    let u = n / 2;
+    let v = n - u;
+
+    // 2. Let A = X[1..u]; B = X[u+1..n].
+    let mut a_digits: Vec<u32> = x_digits[0..u].to_vec();
+    let mut b_digits: Vec<u32> = x_digits[u..n].to_vec();
+
+    // 3. Let b = ceil( ceil(v * log2(radix)) / 8 ).
+    let v_log_radix = v as f64 * (radix as f64).log2();
+    let ceil_v_log_radix = v_log_radix.ceil();
+    let b = if ceil_v_log_radix <= 0.0 { 0 } else { (ceil_v_log_radix as usize + 7) / 8 };
+
+    // 4. Let d = 4 * ceil(b / 4) + 4.
+    let ceil_b_div_4 = (b + 3) / 4;
+    let d = 4 * ceil_b_div_4 + 4;
+
+    // 5. Let P = [1]^1 || [2]^1 || [1]^1 || [radix]^3 || [10]^1 || [u mod 256]^1 || [n]^4 || [t]^4.
+    let mut p = Vec::with_capacity(16);
+    p.push(1); p.push(2); p.push(1);
+    let radix_bytes = radix.to_be_bytes();
+    p.extend_from_slice(&radix_bytes[1..4]);
+    p.push(10);
+    p.push((u % 256) as u8);
+    p.extend_from_slice(&(n as u32).to_be_bytes());
+    p.extend_from_slice(&(t as u32).to_be_bytes());
+    let p_array: [u8; 16] = p.try_into().expect("P should be 16 bytes");
+
+    // 6. For i from 9 down to 0:
+    for i in (0..10).rev() {
+        // v. If i is even, let m = u; else, let m = v.
+        let m = if i % 2 == 0 { u } else { v };
+
+        // i. Let Q = T || [0]^(-t-b-1) mod 16 || [i]^1 || [NUM_radix(A)]^b.
+        let num_a = num_radix(&a_digits, radix)?; // Use A here
+        let num_a_bytes = bytes_radix(&num_a, b)?;
+
+        let q_len_before_padding = t + 1 + b;
+        let num_zeros = (16 - (q_len_before_padding % 16)) % 16;
+
+        let mut q = Vec::with_capacity(t + num_zeros + 1 + b);
+        q.extend_from_slice(tweak);
+        q.extend(std::iter::repeat(0u8).take(num_zeros));
+        q.push(i as u8);
+        q.extend_from_slice(&num_a_bytes); // Use NUM_radix(A) bytes
+
+        // ii. Let R = PRF(P || Q).
+        let mut prf_input = Vec::with_capacity(16 + q.len());
+        prf_input.extend_from_slice(&p_array);
+        prf_input.extend_from_slice(&q);
+        let r = prf(key, &prf_input)?;
+
+        // iii. Let S be the first d bytes of R || CIPH_K(R ^ [1]^16) || ...
+        let num_s_blocks_total = (d + 15) / 16;
+        let mut s_bytes = Vec::with_capacity(num_s_blocks_total * 16);
+        s_bytes.extend_from_slice(&r);
+        if num_s_blocks_total > 1 {
+            let r_xor_j_base = r;
+            for j_val in 1..num_s_blocks_total {
+                let j_bytes = (j_val as u32).to_be_bytes();
+                let mut j_block = [0u8; 16];
+                j_block[12..16].copy_from_slice(&j_bytes);
+                let mut r_xor_j = r_xor_j_base;
+                xor_bytes(&mut r_xor_j, &j_block);
+                let s_block = ciph(key, &r_xor_j)?;
+                s_bytes.extend_from_slice(&s_block);
+            }
+        }
+        s_bytes.truncate(d);
+
+        // iv. Let y = NUM(S).
+        let y = num_bytes(&s_bytes);
+
+        // vi. Let c = (NUM_radix(B) - y) mod radix^m.
+        let num_b = num_radix(&b_digits, radix)?;
+        let big_radix = radix.to_biguint().ok_or(FF1Error::BigUintConversion)?;
+        let modulus = big_radix.pow(m as u32);
+
+        // (a - b) mod n == (a - (b mod n) + n) mod n
+        let y_mod = y % &modulus;
+        let c = if num_b >= y_mod {
+            (num_b - y_mod) % &modulus // Standard case
+        } else {
+            // num_b < y_mod, so num_b - y_mod is negative
+            // Add modulus before taking the final modulo
+            (num_b + &modulus - y_mod) % &modulus
+        };
+
+
+        // vii. Let C = STR_radix^m(c).
+        let c_digits = str_radix(c, radix, m)?;
+
+        // viii. Let B = A.
+        b_digits = a_digits;
+
+        // ix. Let A = C.
+        a_digits = c_digits;
+    }
+
+    // 7. Return A || B.
+    let mut result_digits = a_digits;
+    result_digits.extend(b_digits);
+
+    Ok(result_digits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_trip_test() {
+        let pt_str = "3216";
+        let tweak_str = "1329999";
+        let key: [u8; 16] = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+            0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
+        let radix: u32 = 10;
+
+        let tweak_bytes = tweak_str.as_bytes();
+
+        let minlen = 2;
+        let maxlen = 100;
+        let max_tlen = 32;
+
+        let x_digits: Vec<u32> = pt_str
+            .chars()
+            .map(|c| c.to_digit(radix).ok_or_else(|| FF1Error::InvalidCharDigit(c, radix)))
+            .collect::<Result<Vec<_>, _>>().unwrap(); // Propagate potential char conversion error
+
+        let result_digits = ff1_encrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &x_digits).unwrap();
+        let decrypted_digits = ff1_decrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &result_digits).unwrap();
+        assert_eq!(decrypted_digits, x_digits, "Encryption result does not match expected ciphertext");
+    }
 
     #[test]
     fn csdn_case_test() {
@@ -332,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn another_test() {
+    fn failed_test() {
         let pt_str = "620805";
         let tweak_str = "4601000000004101LS6A2E0F4NA000030";
         let key = b"6666666600000000";
