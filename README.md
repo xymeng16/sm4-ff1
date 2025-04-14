@@ -7,7 +7,7 @@
 
 ### 用法
 ```rust
-use sm4_ff1::ff1_encrypt;
+use sm4_ff1::{ff1_encrypt, ff1_decrypt};
 use sm4_ff1::ff1error::FF1Error;
 
 let pt_str = "3216";
@@ -34,6 +34,8 @@ let expected_digits: Vec<u32> = expected_ciphertext_str
     .collect::<Result<Vec<_>, _>>().unwrap();
 
 let result_digits = ff1_encrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &x_digits).unwrap();
-
 assert_eq!(result_digits, expected_digits, "Encryption result does not match expected ciphertext");
+
+let decrypted_digits = ff1_decrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &result_digits).unwrap();
+assert_eq!(decrypted_digits, x_digits, "Encryption result does not match expected ciphertext");
 ```
