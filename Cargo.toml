@@ -1,0 +1,13 @@
+[package]
+name = "sm4-ff1"
+description = "SM4 FF1 implementation"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+num-bigint = "0.4.6"
+neuedu-cryptos = { version = "0.6.3", features = ["block", "sm4", "cbc"] }
+num-traits = "0.2.19"
+thiserror = "2.0.12"
+num-integer = "0.1.46"
