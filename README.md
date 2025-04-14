@@ -1,5 +1,5 @@
 ## 基于SM4国密算法的FF1保形加密实现
-整体逻辑参照https://github.com/0NG/Format-Preserving-Encryption实现，目前只支持CBC模式，希望能实现其他模式。
+整体逻辑参照 https://github.com/0NG/Format-Preserving-Encryption 实现，目前只支持CBC模式，希望能实现其他模式。
 
 玩具代码，不做**密码学意义**上的安全性保证，请谨慎使用。此外，仅在下述用例中测试通过，欢迎多多测试，找出问题。
 
