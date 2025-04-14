@@ -4,6 +4,7 @@ description = "SM4 FF1 implementation"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+repository = "https://github.com/xymeng16/sm4-ff1"
 
 [dependencies]
 num-bigint = "0.4.6"
