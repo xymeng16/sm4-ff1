@@ -1,4 +1,4 @@
-mod ff1error;
+pub mod ff1error;
 
 use num_bigint::{BigUint, ToBigUint};
 use num_traits::{Zero, Pow, ToPrimitive};
@@ -103,11 +103,6 @@ fn bytes_radix(n: &BigUint, len: usize) -> Result<Vec<u8>, FF1Error> {
 
 /// Implements FF1 Encryption according to the provided algorithm image.
 ///
-/// **WARNING:** Uses a non-standard adaptation of the provided SM4-CBC function
-/// for the internal block cipher `CIPH`. This deviates from the FF1 standard
-/// and may have security implications. The S-generation step also follows the
-/// image, which differs from the NIST standard. Use with caution.
-///
 /// # Arguments
 /// * `key` - The 128-bit (16 byte) key for SM4.
 /// * `radix` - The base of the numeral string X (2 <= radix <= 2^16).
@@ -120,6 +115,39 @@ fn bytes_radix(n: &BigUint, len: usize) -> Result<Vec<u8>, FF1Error> {
 /// # Returns
 /// * `Ok(Vec<u32>)` - The encrypted numeral string Y as a vector of digits.
 /// * `Err(Ff1Error)` - An error if input parameters are invalid or crypto operations fail.
+///
+/// # Example
+/// ```rust
+/// use sm4_ff1::ff1_encrypt;
+/// use sm4_ff1::ff1error::FF1Error;
+///
+/// let pt_str = "3216";
+/// let tweak_str = "1329999";
+/// let key: [u8; 16] = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+///     0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
+/// let expected_ciphertext_str = "8956";
+/// let radix: u32 = 10;
+///
+/// let tweak_bytes = tweak_str.as_bytes();
+///
+/// let minlen = 2;
+/// let maxlen = 100;
+/// let max_tlen = 32;
+///
+/// let x_digits: Vec<u32> = pt_str
+///     .chars()
+///     .map(|c| c.to_digit(radix).ok_or_else(|| FF1Error::InvalidCharDigit(c, radix)))
+///     .collect::<Result<Vec<_>, _>>().unwrap();
+///
+/// let expected_digits: Vec<u32> = expected_ciphertext_str
+///     .chars()
+///     .map(|c| c.to_digit(radix).ok_or_else(|| FF1Error::InvalidCharDigit(c, radix)))
+///     .collect::<Result<Vec<_>, _>>().unwrap();
+///
+/// let result_digits = ff1_encrypt(&key, radix, minlen, maxlen, max_tlen, tweak_bytes, &x_digits).unwrap();
+///
+/// assert_eq!(result_digits, expected_digits, "Encryption result does not match expected ciphertext");
+/// ```
 pub fn ff1_encrypt(
     key: &[u8; 16],
     radix: u32,
